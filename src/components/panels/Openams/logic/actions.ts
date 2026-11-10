@@ -20,6 +20,7 @@ import {
     GROUP_CHOICE_NONE,
     groupEditReason,
     groupNextName,
+    laneIdOk,
     MATERIALS,
     Sev,
     SlotState,
@@ -336,6 +337,7 @@ function dispatch(w: Writer, line: string, m: Model): Mapped {
             if (!lane) return refuse(str('REASON_LANE_UNKNOWN'))
             const withheld = bayWithheld(m, found.unit, found.slot, BayAct.UNLOAD)
             if (withheld !== null) return refuse(withheld)
+            if (!laneIdOk(lane)) return refuse(str('REASON_NOT_SUPPORTED'))
             w.cmd(`OPENAMS_UNLOAD FPS=${lane}`)
             return { rc: 1, script: '' }
         }
@@ -353,6 +355,9 @@ function dispatch(w: Writer, line: string, m: Model): Mapped {
             const reason = notReady(m, lt.loadedUnit) ?? bayWithheld(m, lt.loadedUnit, lt.loadedSlot, BayAct.UNLOAD)
             if (reason !== null) return refuse(reason)
         }
+        // A lane id is the host's own text: one that could end the command and
+        // start another (a space, a newline) gets no script at all.
+        if (!laneIdOk(m.toolheads[th].id)) return refuse(str('REASON_NOT_SUPPORTED'))
         w.cmd(`OPENAMS_UNLOAD FPS=${m.toolheads[th].id}`)
         return { rc: 1, script: '' }
     }
@@ -591,7 +596,18 @@ function dispatch(w: Writer, line: string, m: Model): Mapped {
         const t = m.toolheads[idx]
         if (!m.cmdRetry) return refuse(str('REASON_NOT_SUPPORTED'))
         if (!t.tcFault) return refuse(str('REASON_NOT_NOW'))
-        if (sequenceRuns(t.busy, t.steps.length, t.stepCurrent, t.stepFailed)) return refuse(str('REASON_GROUP_BUSY'))
+        // A plan that was already there when the fault appeared is an older
+        // sequence's leftover (tcPlanStale), not something running.
+        if (
+            t.busy !== Busy.NONE ||
+            (!t.tcPlanStale && sequenceRuns(t.busy, t.steps.length, t.stepCurrent, t.stepFailed))
+        ) {
+            return refuse(str('REASON_GROUP_BUSY'))
+        }
+        // Retry is sent once for a fault: not again until the fault changes or
+        // clears, or the host answers the one that was sent.
+        if (t.tcRetrySent) return refuse(str('REASON_NOT_NOW'))
+        if (!laneIdOk(t.id)) return refuse(str('REASON_NOT_SUPPORTED'))
         w.cmd(`${m.cmdRetry} FPS=${t.id}`)
         return { rc: 1, script: '' }
     }
