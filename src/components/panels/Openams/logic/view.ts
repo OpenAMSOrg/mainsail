@@ -16,6 +16,8 @@ import {
     CalState,
     SlotState,
     Sev,
+    TagRead,
+    TagReason,
     Variant,
     MAX_TOOLS,
     MATERIALS,
@@ -33,7 +35,7 @@ import {
     toolShortfall,
     alertBadgeExpired,
 } from './model'
-import type { Alert, Model, Toolhead, Unit } from './model'
+import type { Alert, Model, Slot, Toolhead, Unit } from './model'
 import { AlertKind } from './model'
 import {
     copy,
@@ -74,6 +76,7 @@ import type {
     ViewGroup,
     ViewGroupMember,
     ViewSetting,
+    ViewTagRead,
     ViewTile,
     ViewToolhead,
     ViewUnit,
@@ -109,8 +112,10 @@ const SETTING_KEY = 32
 const ACTION_ID = 20
 const ACTION_LINE = 168
 const OPTION_LABEL = 72
+const TAG_READ_TEXT = 128 // VIEW_TAG_READ_TEXT_LEN: "This tag is also in slot {slot}."
+const TAG_MATERIAL = 16 // VIEW_TAG_MATERIAL_LEN (MMU_TAG_MATERIAL_LEN)
 
-const MAX_ACTIONS = 10 // VIEW_ACTIONS_MAX in src/view/view.h
+const MAX_ACTIONS = 11 // VIEW_ACTIONS_MAX in src/view/view.h
 const MAX_ACTIONS_PER_ALERT = 3 // a failed toolchange: retry, unload, clear errors
 const MAX_ALERTS_PER_GROUP = 6
 const MAX_OPTIONS = 160 // every select of one action list shares the pool, as in C
@@ -372,7 +377,7 @@ function buildTile(m: Model, unitIdx: number, bay: number): ViewTile {
     // one is "": only the ring shows "?".
     const material = cut(s.state === SlotState.EMPTY ? '' : s.material, MATERIAL)
 
-    return {
+    const tile: ViewTile = {
         slot_id: cut(slotId(m, unitIdx, bay), ID),
         bay,
         tool,
@@ -399,6 +404,76 @@ function buildTile(m: Model, unitIdx: number, bay: number): ViewTile {
         pending_confirmation: s.pendingConfirmation,
         calibrated: s.calState === CalState.CONFIGURED,
         actions: tileActions(m, unitIdx, bay),
+    }
+    // Left out when there is nothing to say, so a unit that decodes its own tags
+    // (or an older host) gives the tile it always gave.
+    const read = tileTagRead(m, unitIdx, bay)
+    if (read) tile.tag_read = read
+    return tile
+}
+
+// ---------------------------------------------------------------- tag read
+
+/** The unit and bay whose host slot id is `id` (its `bays[i].id`), or null
+ *  (unit_of_global_id() in view.c). */
+function unitOfGlobalId(m: Model, id: number): { unit: number; bay: number } | null {
+    for (let i = 0; i < m.units.length; i++) {
+        const slots = m.units[i].slots
+        for (let j = 0; j < slots.length; j++) if (slots[j].globalId === id) return { unit: i, bay: j }
+    }
+    return null
+}
+
+/** A conflict's note, by its reason. claimed_twice names the other bay the way
+ *  the toolhead's resting path does ("oams1:2"); a slot id no bay of this model
+ *  has is the host's number, and none at all is "?". */
+function tagConflictText(m: Model, s: Slot): string {
+    switch (s.tagReason) {
+        case TagReason.TWO_MOVING:
+        case TagReason.AMBIGUOUS_PAIR:
+            return str('TAGR_TWO_SPOOLS')
+        case TagReason.CHANGED_IN_PLACE:
+            return str('TAGR_CHANGED')
+        case TagReason.NO_TAG_AFTER_TURN:
+            return str('TAGR_NO_TAG')
+        case TagReason.CLAIMED_TWICE: {
+            let slot: string
+            const other = s.tagOther >= 0 ? unitOfGlobalId(m, s.tagOther) : null
+            if (s.tagOther < 0) slot = copy(str('UNKNOWN_MARK'), SUBLABEL)
+            else if (other) slot = fmtUnitBay(m.units[other.unit].name, other.bay, SUBLABEL)
+            else slot = copy(String(s.tagOther), SUBLABEL)
+            return format('TAGR_CLAIMED_TWICE', { slot }, TAG_READ_TEXT)
+        }
+        default:
+            return str('TAGR_CONFLICT') // a reason this build does not know
+    }
+}
+
+/** What the host's tag attribution says about a bay (view_tile_tag_read() in
+ *  view.c), or null when there is nothing to say: no attribution on this unit,
+ *  or the tag is attributed (the RFID mark and the link say it). */
+function tileTagRead(m: Model, unitIdx: number, bay: number): ViewTagRead | null {
+    const s = m.units[unitIdx].slots[bay]
+    switch (s.tagRead) {
+        // a normal state, said plainly: no warning color
+        case TagRead.UNKNOWN:
+            return { state: 'unknown', tone: 'neutral', text: str('TAGR_UNKNOWN'), candidates: [] }
+        case TagRead.CANDIDATE:
+            return {
+                state: 'candidate',
+                tone: 'neutral',
+                text: str('TAGR_CANDIDATE'),
+                candidates: s.tagCandidates.map((k) => ({
+                    material: cut(k.material, TAG_MATERIAL),
+                    color: k.color >= 0 ? hex(k.color) : null,
+                    color_name: k.color >= 0 ? colorName(k.color) : '',
+                })),
+            }
+        // the amber information look: a read that disagrees never blocks a print
+        case TagRead.CONFLICT:
+            return { state: 'conflict', tone: 'info', text: tagConflictText(m, s), candidates: [] }
+        default:
+            return null
     }
 }
 
@@ -773,6 +848,11 @@ function tileActions(m: Model, unitIdx: number, bay: number): ViewAction[] {
 
     simple(list, m, 'unlink', str('ACTION_UNLINK'), 'normal', `unlink ${id}`)
     addChangeGroupAction(list, m, unitIdx, bay, id)
+    // "It is this slot": the tag the bay's reader saw is this bay's. Only a bay
+    // whose tag the host holds as a candidate offers it, beside its Re-read.
+    if (u.rfid && s.tagRead === TagRead.CANDIDATE) {
+        simple(list, m, 'tag_assert', str('ACTION_TAG_ASSERT'), 'normal', `tag_assert ${id}`)
+    }
     // A unit with no reader can never re-read a tag: no such action.
     if (u.rfid) simple(list, m, 'reread', str('ACTION_REREAD'), 'normal', `reread ${id}`)
     const cal = simple(list, m, 'calibrate', str('ACTION_CALIBRATE'), 'normal', `calibrate ${id}`)

@@ -26,6 +26,7 @@ import {
     SlotState,
     slotGroup,
     slotId,
+    TagRead,
     UnitAct,
 } from './model'
 import type { Model, Unit } from './model'
@@ -385,6 +386,23 @@ function dispatch(w: Writer, line: string, m: Model): Mapped {
         // BAY= is the re-read of that bay (C3): a unit that reads its tags per
         // bay refuses the command without it.
         w.cmd(`OAMS_RFID_SCAN OAMS=${idx} BAY=${found.slot}`)
+        return { rc: 1, script: '' }
+    }
+
+    // `tag_assert <slot>`: "It is this slot" - the one tag the bay's reader
+    // holds belongs to this bay (C3, ASSERT=1). Only a bay whose tag the host
+    // holds as a candidate (`tg` "c") offers it; the host refuses it when the
+    // field holds two tags, or none.
+    if ((arg = rest(line, 'tag_assert')) !== null) {
+        const found = slotFind(m, arg)
+        if (!found) return NOT_MINE
+        const s = m.units[found.unit].slots[found.slot]
+        if (s.state === SlotState.EMPTY) return refuse(str('REASON_BAY_EMPTY'))
+        const idx = unitHostIdx(m, found.unit)
+        if (idx < 0) return refuse(str('REASON_UNIT_UNKNOWN'))
+        if (!unitMay(m, found.unit, UnitAct.RFID_SCAN)) return refuse(str('REASON_NOT_SUPPORTED'))
+        if (s.tagRead !== TagRead.CANDIDATE) return refuse(str('REASON_NOT_NOW'))
+        w.cmd(`OAMS_RFID_SCAN OAMS=${idx} BAY=${found.slot} ASSERT=1`)
         return { rc: 1, script: '' }
     }
 
