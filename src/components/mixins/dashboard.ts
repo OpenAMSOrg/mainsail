@@ -16,9 +16,9 @@ import {
     mdiWebcam,
     mdiAdjust,
     mdiMulticast,
-    mdiViewGrid,
 } from '@mdi/js'
 import { afcIconLogo } from '@/plugins/afcIcons'
+import { openamsIconLogo } from '@/components/panels/Openams/logo'
 
 @Component
 export default class DashboardMixin extends BaseMixin {
@@ -81,7 +81,7 @@ export default class DashboardMixin extends BaseMixin {
             case 'afc':
                 return afcIconLogo
             case 'openams':
-                return mdiViewGrid
+                return openamsIconLogo
 
             default:
                 return mdiInformation
