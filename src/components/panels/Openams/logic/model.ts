@@ -199,6 +199,7 @@ export interface Toolhead {
      *  panel's Retry continues. An older host never sends it. */
     tcFault: boolean
     tcUnload: boolean // the failed operation is an unload, else a load
+    tcPanel: boolean // the panel started it (not the print): Abandon may forget it
     /** The panel sent Retry for this very fault (this lane, this tcSince) and
      *  the host has neither answered it nor changed the fault: Retry is not
      *  offered again. Cleared when the fault changes or clears, when the host
@@ -361,6 +362,9 @@ export interface Model {
      *  (UI API), '' when it advertises none (an older host): the panel's Retry
      *  sends this word, never one of its own. */
     cmdRetry: string
+    /** `oams_manager.commands.abandon` the same way: the word that forgets a
+     *  failed load or unload the panel started, '' on an older host. */
+    cmdAbandon: string
     /** Spoolman's vendor names, as listed (sorted), each whole. */
     vendors: string[]
 
@@ -456,6 +460,7 @@ export function newModel(): Model {
         spoolmanEdit: false,
         spoolmanStop: false,
         cmdRetry: '',
+        cmdAbandon: '',
         vendors: [],
         thisUnit: 0,
         loaded: false,
@@ -564,6 +569,7 @@ function toolheadGetOrCreate(m: Model, id: string | null): Toolhead | null {
         errorCount: 0,
         tcFault: false,
         tcUnload: false,
+        tcPanel: false,
         tcRetrySent: false,
         tcPlanStale: false,
         tcLaneSeen: false,
@@ -1629,6 +1635,7 @@ function mapToolchangeFault(th: Toolhead, fault: unknown, stage: unknown): void 
 
     th.tcFault = isObject(fault)
     th.tcUnload = false
+    th.tcPanel = false
     th.tcSince = -1
     th.tcGroup = ''
     th.tcStep = ''
@@ -1660,6 +1667,7 @@ function mapToolchangeFault(th: Toolhead, fault: unknown, stage: unknown): void 
     th.tcLaneSeen = true
 
     th.tcUnload = jstring(fault, 'kind') === 'unload'
+    th.tcPanel = fault.panel === true
     th.tcGroup = cut(jstring(fault, 'group') ?? '', TC_GROUP)
     th.tcReason = cut(jstring(fault, 'reason') ?? '', TC_REASON)
 
@@ -1716,8 +1724,12 @@ export function applyLanes(m: Model, lanes: unknown): boolean {
  *  in status_map.c); anything else, or no map at all (an older host), leaves
  *  none, and Retry is not offered. */
 export function applyCommands(m: Model, commands: unknown): void {
-    const retry = isObject(commands) ? jstring(commands, 'retry') : null
-    m.cmdRetry = retry !== null && /^[A-Z_][A-Z0-9_]*$/.test(retry) && retry.length < COMMAND ? retry : ''
+    const word = (key: string): string => {
+        const w = isObject(commands) ? jstring(commands, key) : null
+        return w !== null && /^[A-Z_][A-Z0-9_]*$/.test(w) && w.length < COMMAND ? w : ''
+    }
+    m.cmdRetry = word('retry')
+    m.cmdAbandon = word('abandon')
 }
 
 /** `print_stats`: only the file name is read. */
