@@ -1,6 +1,6 @@
 {
     "name": "mainsail",
-    "version": "2.19.0-openams.10",
+    "version": "2.19.0-openams.11",
     "private": true,
     "type": "module",
     "decription": "a klipper web interface",
